@@ -1,0 +1,162 @@
+/*
+ * @Author: xgj
+ * @Date: 2023-11-22
+ * @LastEditors: xgj
+ * @LastEditTime: 2023-11-22
+ * @FilePath:
+ * @Description: 
+ * 
+ * Copyright (c) 2023 by Shenzhen Genvict Technologies Co., Ltd. All Rights Reserved. 
+ * @Change Log:
+ */
+
+
+//=======================================================================//
+//= Include files.                                                      =//
+//=======================================================================//
+#include "DemoProc.h"
+#include "SGUI_Text.h"
+#include "SGUI_FontResource.h"
+#include "Resource.h"
+
+#include "display.h"
+//=======================================================================//
+//= Static function declaration.                                        =//
+//=======================================================================//
+static HMI_ENGINE_RESULT    HMI_TextPage_Prepare(SGUI_SCR_DEV* pstDeviceIF, const void* pstParameters);
+static HMI_ENGINE_RESULT    HMI_TextPage_RefreshScreen(SGUI_SCR_DEV* pstDeviceIF, const void* pstParameters);
+static HMI_ENGINE_RESULT    HMI_TextPage_ProcessEvent(SGUI_SCR_DEV* pstDeviceIF, const HMI_EVENT_BASE* pstEvent, SGUI_INT* piActionID);
+static HMI_ENGINE_RESULT    HMI_TextPage_PostProcess(SGUI_SCR_DEV* pstDeviceIF, HMI_ENGINE_RESULT eProcResult, SGUI_INT iActionID);
+
+//=======================================================================//
+//= Static variable declaration.                                        =//
+//=======================================================================//
+static HMI_SCREEN_ACTION           s_stDemoTextActions =   {   NULL,
+                                                            HMI_TextPage_Prepare,
+                                                            HMI_TextPage_RefreshScreen,
+                                                            HMI_TextPage_ProcessEvent,
+                                                            HMI_TextPage_PostProcess
+                                                        };
+
+//=======================================================================//
+//= Global variable declaration.                                        =//
+//=======================================================================//
+HMI_SCREEN_OBJECT       g_stHMI_IpShow_Page =  {   HMI_SCREEN_ID_IP_SHOW_PAGE,
+                                                        &s_stDemoTextActions
+                                                    };
+
+//=======================================================================//
+//= Function define.                                                    =//
+//=======================================================================//
+
+static HMI_ENGINE_RESULT HMI_TextPage_Prepare (SGUI_SCR_DEV* pstDeviceIF, const void* pstParameters)
+{
+    /*----------------------------------*/
+    /* Process                          */
+    /*----------------------------------*/
+    if(NULL != pstDeviceIF->fnClear)
+    {
+        pstDeviceIF->fnClear();
+    }
+    else
+    {
+        SGUI_Basic_DrawRectangle(pstDeviceIF, 0, 0, pstDeviceIF->stSize.iWidth, pstDeviceIF->stSize.iHeight, SGUI_COLOR_BKGCLR, SGUI_COLOR_BKGCLR);
+    }
+    HMI_TextPage_RefreshScreen(pstDeviceIF, pstParameters);
+    return HMI_RET_NORMAL;
+}
+
+extern unsigned char g_eth0_ip[20];
+extern unsigned char g_eth1_ip[20];
+
+static HMI_ENGINE_RESULT HMI_TextPage_RefreshScreen(SGUI_SCR_DEV* pstDeviceIF, const void* pstParameters)
+{
+    /*----------------------------------*/
+    /* Variable Declaration             */
+    /*----------------------------------*/
+    SGUI_RECT                   stDisplayArea;
+    // SGUI_POINT                  stInnerPos;
+
+    // /*----------------------------------*/
+    // /* Initialize                       */
+    // /*----------------------------------*/
+    // stInnerPos.iX =         0;
+    // stInnerPos.iY =         0;
+    //     stDisplayArea.iWidth = pstDeviceIF->stSize.iWidth;
+    // stDisplayArea.iHeight = pstDeviceIF->stSize.iHeight;;
+
+    stDisplayArea.iX = 0;
+    stDisplayArea.iY = 0;
+    stDisplayArea.iWidth = pstDeviceIF->stSize.iWidth;
+    stDisplayArea.iHeight = pstDeviceIF->stSize.iHeight;;
+    char buf[100] = {0};
+
+    sprintf(buf, "%s\n%s\n",
+              g_eth_ip.eth0_ip, g_eth_ip.eth1_ip);
+    SGUI_Text_DrawMultipleLinesText(pstDeviceIF, buf, &GB2312_SONGTI18X18, &stDisplayArea, 0, SGUI_DRAW_NORMAL);
+    return HMI_RET_NORMAL;
+}
+
+static HMI_ENGINE_RESULT HMI_TextPage_ProcessEvent(SGUI_SCR_DEV* pstDeviceIF, const HMI_EVENT_BASE* pstEvent, SGUI_INT* piActionID)
+{
+    /*----------------------------------*/
+    /* Variable Declaration             */
+    /*----------------------------------*/
+    HMI_ENGINE_RESULT           eProcessResult;
+    SGUI_INT                    iProcessAction;
+    KEY_PRESS_EVENT*            pstKeyEvent;
+
+    /*----------------------------------*/
+    /* Initialize                       */
+    /*----------------------------------*/
+    eProcessResult =            HMI_RET_NORMAL;
+    iProcessAction =            HMI_DEMO_PROC_NO_ACT;
+    pstKeyEvent =               (KEY_PRESS_EVENT*)pstEvent;
+
+    /*----------------------------------*/
+    /* Process                          */
+    /*----------------------------------*/
+    // Check event is valid.
+    if(SGUI_FALSE == HMI_EVENT_SIZE_CHK(*pstKeyEvent, KEY_PRESS_EVENT))
+    {
+        // Event data is invalid.
+        eProcessResult = HMI_RET_INVALID_DATA;
+    }
+    else if(EVENT_ID_KEY_PRESS == pstEvent->iID)
+    {
+        SGUI_UINT16  uiKeyValue;
+        uiKeyValue = KEY_CODE_VALUE(pstKeyEvent->Data.uiKeyValue);
+        switch(uiKeyValue)
+        {
+            case KEY_VALUE_F5:
+                HMI_TextPage_RefreshScreen(pstDeviceIF, NULL);
+                break;
+            case KEY_VALUE_ESC:
+                iProcessAction = HMI_DEMO_PROC_CANCEL;
+                break;
+        }
+    }
+    if(NULL != piActionID)
+    {
+        *piActionID = iProcessAction;
+    }
+
+    return eProcessResult;
+}
+
+static HMI_ENGINE_RESULT HMI_TextPage_PostProcess(SGUI_SCR_DEV* pstDeviceIF, HMI_ENGINE_RESULT eProcResult, SGUI_INT iActionID)
+{
+    /*----------------------------------*/
+    /* Process                          */
+    /*----------------------------------*/
+    if(HMI_PROCESS_SUCCESSFUL(eProcResult))
+    {
+        if(HMI_DEMO_PROC_CANCEL == iActionID)
+        {
+            HMI_GoBack(NULL);
+        }
+    }
+
+    return HMI_RET_NORMAL;
+}
+

@@ -1,0 +1,261 @@
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/select.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <linux/spi/spidev.h>
+#include <sys/time.h>
+#include <sys/timeb.h>
+#include <stdbool.h>
+#include <linux/sched.h>
+#include <signal.h>
+
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+
+#include "font.h"
+#include "display.h"
+#include "oled.h"
+#include "DemoProc.h"
+
+
+#define OLED_BUTTON_DEV "/dev/bt2"
+
+
+static bool gs_refresh = true;
+
+static unsigned char ROW[] = {0, 16, 32, 48, 64, 80};
+static unsigned char COL[] = {0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120};
+
+
+int get_ip(char *eth, char *ip)
+{
+    int sock = -1, ret = -1;
+    struct ifreq ifr;
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if(0 <= sock && ip)
+    {
+        strcpy(ifr.ifr_name, eth);
+        ioctl(sock, SIOCGIFADDR, &ifr);
+        strcpy(ip, inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
+        ret = 0;
+    }
+
+    if(0 <= sock)
+    {
+        close(sock);
+    }
+
+    return ret;
+}
+
+int get_udp_server(unsigned short port)
+{
+    int sock;
+    struct sockaddr_in saddr;
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if(0 <= sock)
+    {
+        bzero(&saddr, sizeof(saddr));
+        saddr.sin_family = AF_INET;
+        saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        saddr.sin_port = htons(port);
+
+        bind(sock, (struct sockaddr *)&saddr, sizeof(saddr));
+    }
+    return sock;
+}
+
+int handle_msg(char *data)
+{
+    struct display *dp = (struct display *)data;
+
+    if(dp)
+    {
+        if(13 < dp->size)
+        {
+            strcpy(dp->data, "?");
+            dp->size = 1;
+        }
+        
+        switch(dp->type)
+        {
+            case DISPLAY_SYS_VER:
+                if(13 >= dp->size && gs_refresh)
+                {
+                    show_string(COL[3], ROW[2], dp->data, 16);
+                    show_clean_row(COL[3 + dp->size], ROW[2], 13 - dp->size, 16);
+                }
+                break;
+            case DISPLAY_APP_VER:
+                if(13 >= dp->size && gs_refresh)
+                {
+                    show_string(COL[3], ROW[3], dp->data, 16);
+                    show_clean_row(COL[3 + dp->size], ROW[3], 13 - dp->size, 16);
+                }
+                break;
+            case DISPLAY_SYS_STATUS:
+                if(13 >= dp->size && gs_refresh)
+                {
+                    show_string(COL[3], ROW[4], dp->data, 16);
+                    show_clean_row(COL[3 + dp->size], ROW[4], 13 - dp->size, 16);
+                }
+                break;
+            case DISPLAY_APP_STATUS:
+                if(13 >= dp->size && gs_refresh)
+                {
+                    show_string(COL[3], ROW[5], dp->data, 16);
+                    show_clean_row(COL[3 + dp->size], ROW[5], 13 - dp->size, 16);
+                }
+                break;
+            case DISPLAY_NO_REFRESH:
+                gs_refresh = false;
+                break;
+            case DISPLAY_REFRESH:
+                gs_refresh = true;
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+static void oled_show_sleep(int sig) {
+    show_off();
+}
+
+int main(int argc, char* argv[])
+{
+    int ret;
+    int fd, bt_fd, max_fd;
+    fd_set rfds;
+    struct timeval tv;
+    struct sched_param param;
+    unsigned char ip[16];
+    unsigned char msg[128];
+
+    signal(SIGALRM, oled_show_sleep);
+
+    pthread_getschedparam(pthread_self(), &ret, &param);
+    param.sched_priority = 0;
+    sched_setscheduler(0, SCHED_IDLE, &param);
+
+
+
+    int y1, y2;
+    uint8_t d1, d2;
+
+
+    // ST7567_Init("/dev/spidev0.0");
+
+    sgui_init();
+
+    // oled_test();
+
+    sgui_run();
+    return 0;
+    
+    show_clean();
+
+    if(0 == get_ip("eth0", ip))
+    {
+        show_string(COL[0], ROW[0], ip, 16);
+    }
+
+    if(0 == get_ip("eth1", ip))
+    {
+        show_string(COL[0], ROW[1], ip, 16);
+    }
+
+    show_string(COL[0], ROW[2], "SV:", 16);
+    show_string(COL[0], ROW[3], "AV:", 16);
+    show_string(COL[0], ROW[4], "SS:", 16);
+    show_string(COL[0], ROW[5], "AS:", 16);
+
+
+    fd = get_udp_server(10050);
+    if(0 > fd)
+    {
+        printf("get_udp_server err\n");
+        return -1;
+    }
+
+    bt_fd = open(OLED_BUTTON_DEV, O_RDONLY);
+
+    alarm(10);
+
+    for(;;)
+    {
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        
+        if(0 <= bt_fd) {
+            FD_SET(bt_fd, &rfds);
+        }
+
+        max_fd = fd > bt_fd ? fd : bt_fd;
+
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+
+        ret = select(max_fd + 1, &rfds, NULL, NULL, &tv);
+        if(0 < ret)
+        {
+            if(FD_ISSET(fd, &rfds))
+            {
+                bzero(msg, sizeof(msg));
+                if(0 < recv(fd, msg, sizeof(msg), 0))
+                {
+                    handle_msg(msg);
+                }
+            }
+            if(0 <= bt_fd) {
+                if(FD_ISSET(bt_fd, &rfds)) {
+                   alarm(10);
+                   show_on();
+                }
+            }
+        }
+        else if(0 == ret)
+        {
+            if(gs_refresh)
+            {
+                if(0 == get_ip("eth0", ip))
+                {
+                    show_string(COL[0], ROW[0], ip, 16);
+                    if(16 > strlen(ip))
+                    {
+                        show_clean_row(COL[strlen(ip)], ROW[0], 16 - strlen(ip), 16);
+                    }
+                }
+
+                if(0 == get_ip("eth1", ip))
+                {
+                    show_string(COL[0], ROW[1], ip, 16);
+                    if(16 > strlen(ip))
+                    {
+                        show_clean_row(COL[strlen(ip)], ROW[1], 16 - strlen(ip), 16);
+                    }
+                }
+
+                show_string(COL[0], ROW[2], "SV:", 16);
+                show_string(COL[0], ROW[3], "AV:", 16);
+                show_string(COL[0], ROW[4], "SS:", 16);
+                show_string(COL[0], ROW[5], "AS:", 16);
+            }
+       }
+    }
+    
+    return 0;
+}
+
+
